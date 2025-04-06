@@ -89,11 +89,22 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
         loss_epoch = 0.
         if args.encoder == 'vision': 
             text_features = textual_features.t().half()
+
+        delta = None
         for i, (images, target) in enumerate(tqdm(train_loader)):
             
             template = dataset.template[0]
             texts = [template.format(classname.replace('_', ' ')) for classname in dataset.classnames]
             images, target = images.cuda(), target.cuda()
+
+            if delta is None:
+                delta = torch.zeros_like(images[0]).cuda()
+
+            repeated = delta.data.repeat(images.shape[0])
+
+            images.data = images.data + repeated
+
+
             if args.encoder == 'text' or args.encoder == 'both':
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     texts = clip.tokenize(texts).cuda()
@@ -117,6 +128,10 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             optimizer.zero_grad()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
+
+            delta_grad = delta.grad.data
+            delta.data = delta.data + 0.1 * 10/255 * delta_grad
+            delta.data = delta.data / (torch.linalg.norm(delta.data) + 10 ** (-30)) * 10/255
 
             scaler.update()
             scheduler.step()
