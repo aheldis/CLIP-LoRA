@@ -13,7 +13,7 @@ def fgsm_attack(image, epsilon, data_grad):
     return perturbed_image
 
 
-def evaluate_lora(args, clip_model, loader, dataset):
+def evaluate_lora(args, clip_model, loader, dataset, attack=True):
     clip_model.eval()
     with torch.no_grad():
         template = dataset.template[0] 
@@ -35,13 +35,14 @@ def evaluate_lora(args, clip_model, loader, dataset):
         cosine_similarity = image_features @ text_features.t()
 
         # attack
-        loss = F.cross_entropy(cosine_similarity, target)
-        grad = torch.autograd.grad(loss, images, retain_graph=True)[0]
-        images = fgsm_attack(images, 10/255, grad)
-        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-            image_features = clip_model.encode_image(images)
-        image_features = image_features/image_features.norm(dim=-1, keepdim=True)
-        cosine_similarity = image_features @ text_features.t()
+        if attack:
+            loss = F.cross_entropy(cosine_similarity, target)
+            grad = torch.autograd.grad(loss, images, retain_graph=True)[0]
+            images = fgsm_attack(images, 10/255, grad)
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                image_features = clip_model.encode_image(images)
+            image_features = image_features/image_features.norm(dim=-1, keepdim=True)
+            cosine_similarity = image_features @ text_features.t()
         # end attack
 
         acc += cls_acc(cosine_similarity, target) * len(cosine_similarity)
@@ -84,7 +85,7 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
     
     if args.eval_only:
         load_lora(args, list_lora_layers)
-        acc_test = evaluate_lora(args, clip_model, test_loader, dataset)
+        acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=True)
         print("**** Test accuracy: {:.2f}. ****\n".format(acc_test))
         return
 
@@ -172,11 +173,11 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
         # Eval
         if VALIDATION:
             clip_model.eval()
-            acc_val = evaluate_lora(args, clip_model, val_loader, dataset)
+            acc_val = evaluate_lora(args, clip_model, val_loader, dataset, attack=False)
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
         
     
-    acc_test = evaluate_lora(args, clip_model, test_loader, dataset)
+    acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=True)
     print("**** Final test accuracy: {:.2f}. ****\n".format(acc_test))
     
     if args.save_path != None:
