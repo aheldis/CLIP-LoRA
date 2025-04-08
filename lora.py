@@ -6,6 +6,13 @@ from utils import *
 from loralib.utils import mark_only_lora_as_trainable, apply_lora, get_lora_parameters, lora_state_dict, save_lora, load_lora
 from loralib import layers as lora_layers
 
+
+def fgsm_attack(image, epsilon, data_grad):
+    sign_data_grad = data_grad.sign()
+    perturbed_image = image + epsilon*sign_data_grad
+    return perturbed_image
+
+
 def evaluate_lora(args, clip_model, loader, dataset):
     clip_model.eval()
     with torch.no_grad():
@@ -18,15 +25,27 @@ def evaluate_lora(args, clip_model, loader, dataset):
 
     acc = 0.
     tot_samples = 0
-    with torch.no_grad():
-        for i, (images, target) in enumerate(loader):
-            images, target = images.cuda(), target.cuda()
-            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                image_features = clip_model.encode_image(images)
-            image_features = image_features/image_features.norm(dim=-1, keepdim=True)
-            cosine_similarity = image_features @ text_features.t()
-            acc += cls_acc(cosine_similarity, target) * len(cosine_similarity)
-            tot_samples += len(cosine_similarity)
+    # with torch.no_grad():
+    for i, (images, target) in enumerate(loader):
+        images, target = images.cuda(), target.cuda()
+        images.requires_grad = True
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            image_features = clip_model.encode_image(images)
+        image_features = image_features/image_features.norm(dim=-1, keepdim=True)
+        cosine_similarity = image_features @ text_features.t()
+
+        # attack
+        loss = F.cross_entropy(cosine_similarity, target)
+        grad = torch.autograd.grad(loss, images, retain_graph=True)[0]
+        images = fgsm_attack(images, 10/255, grad)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            image_features = clip_model.encode_image(images)
+        image_features = image_features/image_features.norm(dim=-1, keepdim=True)
+        cosine_similarity = image_features @ text_features.t()
+        # end attack
+
+        acc += cls_acc(cosine_similarity, target) * len(cosine_similarity)
+        tot_samples += len(cosine_similarity)
     acc /= tot_samples
 
     return acc
