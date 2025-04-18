@@ -117,6 +117,10 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             texts = [template.format(classname.replace('_', ' ')) for classname in dataset.classnames]
             images, target = images.cuda(), target.cuda()
 
+            # tst = torch.ones_like(images[0]).cuda() * 10 /255
+            # print(torch.norm(tst))
+            # print(images[0].shape)
+
             if delta is None:
                 delta = torch.zeros_like(images[0]).cuda()
                 delta.requires_grad = True
@@ -149,8 +153,12 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             scaler.scale(loss).backward(retain_graph=True)
 
             delta_grad = torch.autograd.grad(loss, delta, retain_graph=True)[0]
-            delta = delta + 0.1 * 10/255 * delta_grad
-            delta = delta / (torch.linalg.norm(delta) + 10 ** (-30)) * 10/255
+            # print(torch.linalg.norm(delta_grad))
+            delta_grad = delta_grad
+            delta = delta + 0.01 * delta_grad
+            delta = torch.clip(delta, -10/255, 10/255)
+            # if torch.linalg.norm(delta) > 15:
+            #     delta = delta / torch.linalg.norm(delta) * 15
             delta = delta.clone().detach()
             delta.requires_grad = True
 
@@ -177,7 +185,7 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
         
     
-    acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=True)
+    acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=False)
     print("**** Final test accuracy: {:.2f}. ****\n".format(acc_test))
     
     if args.save_path != None:
