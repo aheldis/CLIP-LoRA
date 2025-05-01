@@ -28,21 +28,37 @@ def evaluate_lora(args, clip_model, loader, dataset, attack=True):
     # with torch.no_grad():
     for i, (images, target) in enumerate(loader):
         images, target = images.cuda(), target.cuda()
-        images.requires_grad = True
+
+        if args.attack_type != 'None':
+            images.requires_grad = True
+
         with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             image_features = clip_model.encode_image(images)
         image_features = image_features/image_features.norm(dim=-1, keepdim=True)
         cosine_similarity = image_features @ text_features.t()
 
         # attack
+        ori = images.data.clone().detach()
         if attack:
-            loss = F.cross_entropy(cosine_similarity, target)
-            grad = torch.autograd.grad(loss, images, retain_graph=True)[0]
-            images = fgsm_attack(images, 10/255, grad)
-            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                image_features = clip_model.encode_image(images)
-            image_features = image_features/image_features.norm(dim=-1, keepdim=True)
-            cosine_similarity = image_features @ text_features.t()
+            if args.attack_type == 'FGSM':
+                epsilon = args.epsilon
+                pgd_iters = 1
+            else:
+                epsilon = 2.5 * args.epsilon / args.iters
+                pgd_iters = args.iters
+            for iter in range(pgd_iters):
+                loss = F.cross_entropy(cosine_similarity, target)
+                grad = torch.autograd.grad(loss, images, retain_graph=True)[0]
+                images = fgsm_attack(images, epsilon/255, grad).clone().detach()
+                if args.attack_type == 'PGD':
+                    images.data = ori + torch.clamp(images.data - ori, -args.epsilon/255, args.epsilon/255)
+
+                images.requires_grad = True
+                with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                    image_features = clip_model.encode_image(images)
+                image_features = image_features/image_features.norm(dim=-1, keepdim=True)
+                cosine_similarity = image_features @ text_features.t()
+
         # end attack
 
         acc += cls_acc(cosine_similarity, target) * len(cosine_similarity)
@@ -146,21 +162,54 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             
             cosine_similarity = logit_scale * image_features @ text_features.t()
             loss = F.cross_entropy(cosine_similarity, target)
+
+
+            for j in range(args.m):
+
+                delta_grad = torch.autograd.grad(loss, delta, retain_graph=True)[0]
+                if count_iters < 300:
+                    step_size = 1 / (torch.linalg.norm(delta) + 1e-30)
+                    step_size += (1 - step_size) / (300 - count_iters)
+                else:
+                    step_size = 1
+                step_size *= 0.05  # 0.05
+                delta = delta + step_size * delta_grad
+                delta = torch.clip(delta, -10 / 255, 10 / 255)
+
+                delta = delta.clone().detach()
+                delta.requires_grad = True
+                repeated = delta.unsqueeze(0).repeat(images.shape[0], 1, 1, 1)
+                images = images + repeated
+                with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                    image_features = clip_model.encode_image(images)
+                cosine_similarity = logit_scale * image_features @ text_features.t()
+                loss = F.cross_entropy(cosine_similarity, target)
+
+            # delta = None
+
             acc_train += cls_acc(cosine_similarity, target) * target.shape[0]
             loss_epoch += loss.item() * target.shape[0]
             tot_samples += target.shape[0]
             optimizer.zero_grad()
             scaler.scale(loss).backward(retain_graph=True)
 
-            delta_grad = torch.autograd.grad(loss, delta, retain_graph=True)[0]
-            # print(torch.linalg.norm(delta_grad))
-            delta_grad = delta_grad
-            delta = delta + 0.01 * delta_grad
-            delta = torch.clip(delta, -10/255, 10/255)
-            # if torch.linalg.norm(delta) > 15:
-            #     delta = delta / torch.linalg.norm(delta) * 15
-            delta = delta.clone().detach()
-            delta.requires_grad = True
+
+
+            # delta_grad = torch.autograd.grad(loss, delta, retain_graph=True)[0]
+            # # print(torch.linalg.norm(delta_grad))
+            # # delta_grad = torch.sign(delta_grad)
+            # if count_iters < 275:
+            #     step_size = 1 / (torch.linalg.norm(delta) + 1e-30)
+            #     step_size += (1 - step_size) / (275 - count_iters)
+            # else:
+            #     step_size = 1
+            # step_size *= 0.05 #0.05
+            # delta = delta + step_size * delta_grad
+            # delta = torch.clip(delta, -10/255, 10/255)
+            # # if torch.linalg.norm(delta) > 15:
+            # #     delta = delta / torch.linalg.norm(delta) * 15
+            # delta = delta.clone().detach()
+            # delta.requires_grad = True
 
             scaler.step(optimizer)
             scaler.update()
@@ -185,7 +234,7 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
         
     
-    acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=False)
+    acc_test = evaluate_lora(args, clip_model, test_loader, dataset, attack=True)
     print("**** Final test accuracy: {:.2f}. ****\n".format(acc_test))
     
     if args.save_path != None:
@@ -193,4 +242,3 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
     return
             
     
-            

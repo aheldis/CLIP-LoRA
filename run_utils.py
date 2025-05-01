@@ -21,13 +21,13 @@ def get_arguments():
     # Dataset arguments
     parser.add_argument('--root_path', type=str, default='')
     parser.add_argument('--dataset', type=str, default='dtd')
-    parser.add_argument('--shots', default=16, type=int)
+    parser.add_argument('--shots', default=1, type=int)
     # Model arguments
     parser.add_argument('--backbone', default='ViT-B/16', type=str)
     # Training arguments
     parser.add_argument('--lr', default=2e-4, type=float)
     parser.add_argument('--n_iters', default=500, type=int)
-    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--batch_size', default=16, type=int)
     # LoRA arguments
     parser.add_argument('--position', type=str, default='all', choices=['bottom', 'mid', 'up', 'half-up', 'half-bottom', 'all', 'top3'], help='where to put the LoRA modules')
     parser.add_argument('--encoder', type=str, choices=['text', 'vision', 'both'], default='both')
@@ -40,9 +40,16 @@ def get_arguments():
     parser.add_argument('--filename', default='lora_weights', help='file name to save the lora weights (.pt extension will be added)')
     
     parser.add_argument('--eval_only', default=False, action='store_true', help='only evaluate the LoRA modules (save_path should not be None)')
+    parser.add_argument('--m', default=1, help='number of iterations for robustness')
+    parser.add_argument('--attack_type', help='Attack type options: None, FGSM, PGD', type=str, default='PGD')
+    parser.add_argument('--iters', help='Number of iters for PGD?', type=int, default=5)
+    parser.add_argument('--epsilon', help='epsilon?', type=int, default=5.0)
+
+
     args = parser.parse_args()
 
     return args
     
 
+# python main.py --root_path=/data/dtd --dataset=dtd --seed 0
         
